@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
 Forecast Service - Business logic for flood forecasts
+
+Features:
+- DB cache with 1-day expiry (persists across server restarts)
+- Memory cache as secondary layer for faster access
 """
-from datetime import datetime
+from datetime import datetime, date
 from typing import Dict, List, Any, Optional
 import sys
 import os
@@ -18,6 +22,7 @@ from p import (
     calculate_basin_rainfall,
     analyze_basin_forecast
 )
+from repositories.forecast_cache_repository import ForecastCacheRepository
 
 
 class ForecastService:
@@ -27,9 +32,10 @@ class ForecastService:
         self._cache = None
         self._cache_time = None
         self._cache_ttl = 86400  # 24 hours
+        self.cache_repo = ForecastCacheRepository()
 
-    def _is_cache_valid(self) -> bool:
-        """Check if cache is still valid"""
+    def _is_memory_cache_valid(self) -> bool:
+        """Check if memory cache is still valid"""
         if self._cache is None or self._cache_time is None:
             return False
         elapsed = (datetime.now() - self._cache_time).total_seconds()
@@ -42,11 +48,22 @@ class ForecastService:
         Returns:
             Dict with basin forecasts and metadata
         """
-        if self._is_cache_valid():
+        # Step 1: Check memory cache first (fastest)
+        if self._is_memory_cache_valid():
+            print("[Forecast] ✓ Using memory cache")
             return self._cache
 
-        # Fetch weather data for all monitoring points
-        print("Fetching fresh weather data...")
+        # Step 2: Check DB cache (persists across restarts)
+        db_cached = self.cache_repo.get_cached_forecast(date.today())
+        if db_cached:
+            print("[Forecast] ✓ Using DB cache")
+            # Update memory cache
+            self._cache = db_cached
+            self._cache_time = datetime.now()
+            return db_cached
+
+        # Step 3: Fetch fresh data from Open-Meteo API
+        print("[Forecast] Fetching fresh weather data from Open-Meteo...")
         station_data = {}
         dates_ref = None
         failed_stations = []
@@ -87,11 +104,19 @@ class ForecastService:
             "stations_failed": failed_stations
         }
 
-        # Update cache
+        # Save to DB cache
+        self.cache_repo.save_forecast(
+            basins_data=all_analysis,
+            stations_loaded=len(station_data),
+            stations_failed=failed_stations,
+            forecast_date=date.today()
+        )
+
+        # Update memory cache
         self._cache = result
         self._cache_time = datetime.now()
 
-        print(f"✓ Fetched data for {len(all_analysis)} basins")
+        print(f"✓ Fetched and cached data for {len(all_analysis)} basins")
         return result
 
     def get_basin_forecast(self, basin_name: str) -> Dict[str, Any]:
@@ -167,3 +192,6 @@ class ForecastService:
         """Force cache refresh on next request"""
         self._cache = None
         self._cache_time = None
+        # Also invalidate DB cache
+        self.cache_repo.invalidate(date.today())
+        print("✓ Invalidated forecast cache (memory + DB)")

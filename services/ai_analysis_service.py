@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """
 AI Analysis Service - Business logic for DeepSeek AI analysis
+
+Support 2 modes:
+1. Synchronous (blocking): analyze_forecast() - direct call, blocks until done
+2. Asynchronous (non-blocking): analyze_forecast_async() - returns job_id, runs in background
+
+Uses global semaphore to prevent server overload when multiple heavy tasks run concurrently.
 """
 import json
+import threading
 from datetime import date
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from openai import OpenAI
 
 from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
 from repositories.ai_cache_repository import AICacheRepository
 from repositories.evn_reservoir_repository import EVNReservoirRepository
 from repositories.evn_analysis_cache_repository import EVNAnalysisCacheRepository
+from repositories.ai_job_repository import AIJobRepository
+from services.request_manager import acquire_heavy_task, release_heavy_task
 
 
 class AIAnalysisService:
@@ -124,10 +133,13 @@ class AIAnalysisService:
         self.cache_repo = AICacheRepository()
         self.evn_repo = EVNReservoirRepository()
         self.evn_analysis_cache = EVNAnalysisCacheRepository()
+        self.job_repo = AIJobRepository()
         self.client = OpenAI(
             api_key=DEEPSEEK_API_KEY,
             base_url=DEEPSEEK_BASE_URL
         ) if DEEPSEEK_API_KEY else None
+        # Track running background jobs
+        self._running_jobs = set()
 
     def analyze_forecast(
         self,
@@ -190,6 +202,173 @@ class AIAnalysisService:
         analysis["analysis_date"] = str(today)
 
         return analysis
+
+    # ==================== ASYNC (NON-BLOCKING) MODE ====================
+
+    def analyze_forecast_async(
+        self,
+        basin_name: str,
+        forecast_data: Dict[str, Any]
+    ) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """
+        Start AI analysis in background thread (non-blocking).
+
+        Logic:
+        1. Check DB cache first - if today's data exists, return immediately
+        2. Check if there's already a pending/processing job for this basin
+        3. If no existing job, create new job and start background thread
+        4. Return (job_id, cached_result or None)
+
+        Args:
+            basin_name: Basin code
+            forecast_data: Forecast data dict
+
+        Returns:
+            Tuple of (job_id, cached_result_or_none)
+            - If cached: ("cached", analysis_data)
+            - If processing: (job_id, None)
+        """
+        today = date.today()
+        basin_upper = basin_name.upper()
+
+        print(f"\n{'='*50}")
+        print(f"[AI Async] analyze_forecast_async() called for {basin_upper}")
+
+        # Step 1: Check DB cache
+        cached = self.cache_repo.get_cached_analysis(basin_upper, today)
+        if cached:
+            print(f"[AI Async] CACHE HIT! Returning from DB immediately")
+            return ("cached", cached)
+
+        # Step 2: Check for existing pending/processing job
+        existing_job = self.job_repo.get_pending_job(basin_upper)
+        if existing_job:
+            job_id = existing_job["job_id"]
+            print(f"[AI Async] Found existing job: {job_id} (status: {existing_job['status']})")
+            return (job_id, None)
+
+        # Step 3: Create new job
+        job_id = self.job_repo.create_job(basin_upper, forecast_data)
+        print(f"[AI Async] Created new job: {job_id}")
+
+        # Step 4: Start background thread
+        thread = threading.Thread(
+            target=self._run_analysis_job,
+            args=(job_id, basin_upper, forecast_data),
+            daemon=True
+        )
+        thread.start()
+        self._running_jobs.add(job_id)
+
+        print(f"[AI Async] Started background thread for {job_id}")
+        print(f"{'='*50}\n")
+
+        return (job_id, None)
+
+    def _run_analysis_job(
+        self,
+        job_id: str,
+        basin_name: str,
+        forecast_data: Dict[str, Any]
+    ):
+        """
+        Run AI analysis in background thread.
+        Updates job status as it progresses.
+        Uses global semaphore to prevent concurrent heavy tasks.
+        """
+        task_name = f"AI_{basin_name}_{job_id}"
+        semaphore_acquired = False
+
+        try:
+            print(f"[AI Job {job_id}] Starting analysis...")
+
+            # Update status to processing
+            self.job_repo.update_status(job_id, "processing", progress=10)
+
+            today = date.today()
+
+            # Check cache again (in case another thread completed)
+            cached = self.cache_repo.get_cached_analysis(basin_name, today)
+            if cached:
+                print(f"[AI Job {job_id}] Cache found, skipping API call")
+                self.job_repo.update_status(job_id, "completed", result=cached)
+                self._running_jobs.discard(job_id)
+                return
+
+            # Acquire global semaphore before heavy API call
+            semaphore_acquired = acquire_heavy_task(task_name, timeout=180.0)
+            if not semaphore_acquired:
+                print(f"[AI Job {job_id}] Could not acquire semaphore, using fallback")
+                analysis = self._get_fallback_analysis(basin_name, forecast_data)
+            else:
+                # Update progress
+                self.job_repo.update_status(job_id, "processing", progress=30)
+
+                # Call AI
+                if not self.client:
+                    print(f"[AI Job {job_id}] No API key, using fallback")
+                    analysis = self._get_fallback_analysis(basin_name, forecast_data)
+                else:
+                    try:
+                        self.job_repo.update_status(job_id, "processing", progress=50)
+                        analysis = self._call_deepseek_api(basin_name, forecast_data)
+                        self.job_repo.update_status(job_id, "processing", progress=80)
+                    except Exception as e:
+                        print(f"[AI Job {job_id}] API error: {e}, using fallback")
+                        analysis = self._get_fallback_analysis(basin_name, forecast_data)
+
+            # Save to cache
+            self.cache_repo.save_analysis(basin_name, analysis, today)
+            analysis["analysis_date"] = str(today)
+
+            # Update job as completed
+            self.job_repo.update_status(job_id, "completed", result=analysis)
+            print(f"[AI Job {job_id}] Completed successfully!")
+
+        except Exception as e:
+            print(f"[AI Job {job_id}] Failed with error: {e}")
+            self.job_repo.update_status(job_id, "failed", error_message=str(e))
+
+        finally:
+            self._running_jobs.discard(job_id)
+            if semaphore_acquired:
+                release_heavy_task(task_name)
+
+    def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get status of an AI analysis job.
+
+        Args:
+            job_id: Job identifier
+
+        Returns:
+            Dict with job status, progress, and result (if completed)
+        """
+        if job_id == "cached":
+            return {"status": "completed", "progress": 100, "from_cache": True}
+
+        job = self.job_repo.get_job(job_id)
+        if not job:
+            return None
+
+        response = {
+            "job_id": job["job_id"],
+            "basin_code": job["basin_code"],
+            "status": job["status"],
+            "progress": job["progress"],
+            "created_at": job["created_at"].isoformat() if job.get("created_at") else None
+        }
+
+        if job["status"] == "completed" and job.get("result"):
+            response["result"] = job["result"]
+            response["completed_at"] = job["completed_at"].isoformat() if job.get("completed_at") else None
+
+        if job["status"] == "failed":
+            response["error"] = job.get("error_message")
+
+        return response
+
+    # ==================== SYNC MODE (ORIGINAL) ====================
 
     def _call_deepseek_api(
         self,
