@@ -1,9 +1,23 @@
+# FastAPI & Server
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
-requests==2.31.0
 python-multipart==0.0.6
 pydantic==2.9.2
+
+# Database
+psycopg2-binary==2.9.9
 psycopg[binary]==3.2.3
 sqlalchemy==2.0.36
+alembic==1.17.2
+
+# HTTP & Parsing
+requests==2.31.0
+beautifulsoup4==4.12.3
+lxml==5.1.0
+
+# AI & OpenAI
+openai==1.55.0
+
+# Utilities
 python-dotenv==1.0.0
 numpy==1.26.4
