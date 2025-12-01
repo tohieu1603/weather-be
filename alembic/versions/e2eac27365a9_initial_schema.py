@@ -177,7 +177,7 @@ def upgrade() -> None:
         )
     """)
 
-    # AI Analysis Jobs
+    # AI Analysis Jobs - Full schema
     op.execute("""
         CREATE TABLE IF NOT EXISTS ai_analysis_jobs (
             id SERIAL PRIMARY KEY,
@@ -185,8 +185,12 @@ def upgrade() -> None:
             basin_code VARCHAR(50) NOT NULL,
             status VARCHAR(20) DEFAULT 'pending',
             progress INTEGER DEFAULT 0,
+            forecast_data JSONB,
             result JSONB,
-            error TEXT,
+            error_message TEXT,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            expires_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP + INTERVAL '1 day',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -388,6 +392,19 @@ def upgrade() -> None:
         $$ LANGUAGE plpgsql;
     """)
 
+    op.execute("""
+        CREATE OR REPLACE FUNCTION cleanup_expired_ai_jobs()
+        RETURNS INTEGER AS $$
+        DECLARE
+            deleted_count INTEGER;
+        BEGIN
+            DELETE FROM ai_analysis_jobs WHERE expires_at < CURRENT_TIMESTAMP;
+            GET DIAGNOSTICS deleted_count = ROW_COUNT;
+            RETURN deleted_count;
+        END;
+        $$ LANGUAGE plpgsql;
+    """)
+
 
 def downgrade() -> None:
     """Downgrade schema - Drop all tables."""
@@ -395,6 +412,7 @@ def downgrade() -> None:
     # Drop functions first
     op.execute("DROP FUNCTION IF EXISTS cleanup_expired_ai_cache()")
     op.execute("DROP FUNCTION IF EXISTS cleanup_expired_combined_alerts_cache()")
+    op.execute("DROP FUNCTION IF EXISTS cleanup_expired_ai_jobs()")
 
     # Drop in reverse order (dependencies first)
     tables = [
