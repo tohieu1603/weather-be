@@ -2,11 +2,16 @@
 """
 Main FastAPI application - Flood Forecast System
 """
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 
 from config import CORS_ORIGINS
+
+# Server settings from env
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", "8000"))
 from controllers import (
     forecast_router,
     weather_router,
@@ -55,4 +60,4 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host=HOST, port=PORT, reload=True)

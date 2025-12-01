@@ -157,14 +157,22 @@ def upgrade() -> None:
 
     # === Cache Tables ===
 
-    # AI Analysis Cache
+    # AI Analysis Cache - Full schema
     op.execute("""
         CREATE TABLE IF NOT EXISTS ai_analysis_cache (
             id SERIAL PRIMARY KEY,
             basin_code VARCHAR(50) NOT NULL,
             analysis_date DATE NOT NULL,
-            analysis_data JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            peak_rain JSONB,
+            flood_timeline JSONB,
+            affected_areas JSONB,
+            overall_risk JSONB,
+            recommendations JSONB,
+            summary TEXT,
+            raw_response JSONB,
+            tokens_used INTEGER,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP + INTERVAL '1 day',
             UNIQUE(basin_code, analysis_date)
         )
     """)
@@ -196,33 +204,57 @@ def upgrade() -> None:
         )
     """)
 
-    # Weather Alerts Cache
+    # Weather Alerts Cache - Full schema
     op.execute("""
         CREATE TABLE IF NOT EXISTS weather_alerts_cache (
             id SERIAL PRIMARY KEY,
-            cache_date DATE NOT NULL UNIQUE,
-            alerts_data JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            alert_id VARCHAR(100) UNIQUE,
+            alert_type VARCHAR(50),
+            category VARCHAR(50),
+            title VARCHAR(500),
+            severity VARCHAR(20),
+            alert_date DATE,
+            location_code VARCHAR(50),
+            region VARCHAR(100),
+            provinces TEXT,
+            description TEXT,
+            data JSONB,
+            recommendations TEXT,
+            source VARCHAR(100) DEFAULT 'Open-Meteo',
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    # Dam Alerts Cache
+    # Dam Alerts Cache - Full schema
     op.execute("""
         CREATE TABLE IF NOT EXISTS dam_alerts_cache (
             id SERIAL PRIMARY KEY,
-            cache_date DATE NOT NULL UNIQUE,
-            alerts_data JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            dam_code VARCHAR(50),
+            dam_name VARCHAR(255),
+            alert_type VARCHAR(50),
+            severity VARCHAR(20),
+            alert_date DATE,
+            water_level DECIMAL(10, 2),
+            capacity_percent DECIMAL(5, 2),
+            inflow DECIMAL(10, 2),
+            outflow DECIMAL(10, 2),
+            data JSONB,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    # Combined Alerts Cache
+    # Combined Alerts Cache - Full schema
     op.execute("""
         CREATE TABLE IF NOT EXISTS combined_alerts_cache (
             id SERIAL PRIMARY KEY,
-            cache_date DATE NOT NULL UNIQUE,
-            alerts_data JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            cache_key VARCHAR(100) NOT NULL,
+            cache_date DATE NOT NULL,
+            alerts_data JSONB,
+            summary_data JSONB,
+            total_count INTEGER DEFAULT 0,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP + INTERVAL '1 day',
+            UNIQUE(cache_key, cache_date)
         )
     """)
 
@@ -263,18 +295,25 @@ def upgrade() -> None:
             inflow DECIMAL(10, 2),
             outflow DECIMAL(10, 2),
             recorded_date DATE,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    # EVN Analysis Cache
+    # EVN Analysis Cache - Full schema
     op.execute("""
         CREATE TABLE IF NOT EXISTS evn_analysis_cache (
             id SERIAL PRIMARY KEY,
-            reservoir_id VARCHAR(50) NOT NULL,
+            reservoir_id VARCHAR(100) NOT NULL,
             analysis_date DATE NOT NULL,
-            analysis_data JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            summary TEXT,
+            risk_level VARCHAR(20),
+            risk_score DECIMAL(5, 2),
+            recommendations JSONB,
+            raw_response JSONB,
+            combined_risk_score DECIMAL(5, 2),
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP + INTERVAL '1 day',
             UNIQUE(reservoir_id, analysis_date)
         )
     """)
@@ -316,10 +355,46 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS idx_evn_reservoirs_date ON evn_reservoirs(recorded_date)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(alert_type)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_station_data_time ON station_data(recorded_at)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_combined_alerts_key_date ON combined_alerts_cache(cache_key, cache_date)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_weather_alerts_date ON weather_alerts_cache(alert_date)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_weather_alerts_severity ON weather_alerts_cache(severity)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_dam_alerts_date ON dam_alerts_cache(alert_date)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_evn_analysis_date ON evn_analysis_cache(analysis_date)")
+
+    # === Cleanup Functions ===
+    op.execute("""
+        CREATE OR REPLACE FUNCTION cleanup_expired_ai_cache()
+        RETURNS INTEGER AS $$
+        DECLARE
+            deleted_count INTEGER;
+        BEGIN
+            DELETE FROM ai_analysis_cache WHERE expires_at < CURRENT_TIMESTAMP;
+            GET DIAGNOSTICS deleted_count = ROW_COUNT;
+            RETURN deleted_count;
+        END;
+        $$ LANGUAGE plpgsql;
+    """)
+
+    op.execute("""
+        CREATE OR REPLACE FUNCTION cleanup_expired_combined_alerts_cache()
+        RETURNS INTEGER AS $$
+        DECLARE
+            deleted_count INTEGER;
+        BEGIN
+            DELETE FROM combined_alerts_cache WHERE expires_at < CURRENT_TIMESTAMP;
+            GET DIAGNOSTICS deleted_count = ROW_COUNT;
+            RETURN deleted_count;
+        END;
+        $$ LANGUAGE plpgsql;
+    """)
 
 
 def downgrade() -> None:
     """Downgrade schema - Drop all tables."""
+
+    # Drop functions first
+    op.execute("DROP FUNCTION IF EXISTS cleanup_expired_ai_cache()")
+    op.execute("DROP FUNCTION IF EXISTS cleanup_expired_combined_alerts_cache()")
 
     # Drop in reverse order (dependencies first)
     tables = [
