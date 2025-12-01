@@ -354,7 +354,7 @@ def upgrade() -> None:
     # === Indexes ===
     op.execute("CREATE INDEX IF NOT EXISTS idx_ai_cache_basin_date ON ai_analysis_cache(basin_code, analysis_date)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_forecast_cache_date ON forecast_cache(forecast_date)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_evn_reservoirs_date ON evn_reservoirs(recorded_date)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_evn_reservoirs_fetched ON evn_reservoirs(fetched_at)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(alert_type)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_station_data_time ON station_data(recorded_at)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_combined_alerts_key_date ON combined_alerts_cache(cache_key, cache_date)")
