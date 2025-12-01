@@ -439,7 +439,10 @@ BẮT BUỘC trả về JSON với TẤT CẢ các tỉnh và TỐI THIỂU 3-4 
                 max_rain = day["daily_rain"]
                 peak_date = day["date"]
 
-        # Determine intensity
+        # Determine intensity and whether flood is possible
+        # Only consider flood timeline if rainfall is significant (>= 30mm)
+        has_flood_risk = max_rain >= 30
+
         if max_rain >= 100:
             intensity = "Rất lớn"
             risk_level = "Cao"
@@ -503,28 +506,42 @@ BẮT BUỘC trả về JSON với TẤT CẢ các tỉnh và TỐI THIỂU 3-4 
                 "districts": districts_data
             })
 
+        # Only generate flood timeline if there's actual flood risk
+        # When rainfall is low (< 30mm), set timeline to null/N/A
+        if has_flood_risk:
+            flood_timeline = {
+                "rising_start": peak_date,
+                "peak_date": peak_date,
+                "receding_end": peak_date
+            }
+            summary = f"Dự báo lượng mưa tối đa {max_rain:.1f}mm. Cần theo dõi diễn biến."
+        else:
+            # No flood risk - set timeline to null/N/A
+            flood_timeline = {
+                "rising_start": "N/A",
+                "peak_date": "N/A",
+                "receding_end": "N/A"
+            }
+            summary = f"Thời tiết ổn định, lượng mưa thấp ({max_rain:.1f}mm). Không có nguy cơ lũ lụt."
+
         return {
             "peak_rain": {
                 "date": peak_date,
                 "amount_mm": max_rain,
                 "intensity": intensity
             },
-            "flood_timeline": {
-                "rising_start": peak_date,
-                "peak_date": peak_date,
-                "receding_end": peak_date
-            },
-            "affected_areas": affected_areas,
+            "flood_timeline": flood_timeline,
+            "affected_areas": affected_areas if has_flood_risk else [],  # No affected areas if no flood risk
             "overall_risk": {
                 "level": risk_level,
                 "score": risk_score,
-                "description": f"Dự báo lượng mưa tối đa {max_rain:.1f}mm. Cần theo dõi diễn biến."
+                "description": summary
             },
             "recommendations": {
-                "government": ["Theo dõi diễn biến thời tiết", "Chuẩn bị phương án ứng phó"],
-                "citizens": ["Theo dõi thông tin cảnh báo", "Chuẩn bị đồ dùng thiết yếu"]
+                "government": ["Theo dõi diễn biến thời tiết", "Chuẩn bị phương án ứng phó"] if has_flood_risk else ["Tiếp tục theo dõi dự báo thời tiết"],
+                "citizens": ["Theo dõi thông tin cảnh báo", "Chuẩn bị đồ dùng thiết yếu"] if has_flood_risk else ["Không cần chuẩn bị đặc biệt"]
             },
-            "summary": f"Dự báo lượng mưa tối đa {max_rain:.1f}mm. Cần theo dõi diễn biến."
+            "summary": summary
         }
 
     def _get_reservoirs_for_basin(self, basin_name: str) -> list:

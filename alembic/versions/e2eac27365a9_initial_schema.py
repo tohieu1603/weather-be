@@ -284,23 +284,21 @@ def upgrade() -> None:
 
     # === EVN Reservoir Tables ===
 
-    # EVN Reservoirs - Hồ chứa EVN
+    # EVN Reservoirs - Hồ chứa EVN (schema matches EVN crawler data)
     op.execute("""
         CREATE TABLE IF NOT EXISTS evn_reservoirs (
             id SERIAL PRIMARY KEY,
-            reservoir_id VARCHAR(50),
             name VARCHAR(255) NOT NULL,
-            river VARCHAR(100),
-            province VARCHAR(100),
-            capacity DECIMAL(15, 2),
-            dead_capacity DECIMAL(15, 2),
-            current_level DECIMAL(10, 2),
-            current_volume DECIMAL(15, 2),
-            inflow DECIMAL(10, 2),
-            outflow DECIMAL(10, 2),
-            recorded_date DATE,
-            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            htl DECIMAL(10, 2),
+            hdbt DECIMAL(10, 2),
+            hc DECIMAL(10, 2),
+            qve DECIMAL(10, 2),
+            total_qx DECIMAL(10, 2),
+            qxt DECIMAL(10, 2),
+            qxm DECIMAL(10, 2),
+            ncxs INTEGER DEFAULT 0,
+            ncxm INTEGER DEFAULT 0,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
