@@ -439,9 +439,9 @@ BẮT BUỘC trả về JSON với TẤT CẢ các tỉnh và TỐI THIỂU 3-4 
                 max_rain = day["daily_rain"]
                 peak_date = day["date"]
 
-        # Determine intensity and whether flood is possible
-        # Only consider flood timeline if rainfall is significant (>= 30mm)
-        has_flood_risk = max_rain >= 30
+        # Determine intensity based on rainfall
+        # Always show affected areas but adjust timeline based on actual risk
+        has_significant_flood_risk = max_rain >= 50  # Only hide timeline if very low rain
 
         if max_rain >= 100:
             intensity = "Rất lớn"
@@ -506,9 +506,8 @@ BẮT BUỘC trả về JSON với TẤT CẢ các tỉnh và TỐI THIỂU 3-4 
                 "districts": districts_data
             })
 
-        # Only generate flood timeline if there's actual flood risk
-        # When rainfall is low (< 30mm), set timeline to null/N/A
-        if has_flood_risk:
+        # Generate flood timeline - only show "N/A" when rainfall is very low
+        if has_significant_flood_risk:
             flood_timeline = {
                 "rising_start": peak_date,
                 "peak_date": peak_date,
@@ -516,13 +515,16 @@ BẮT BUỘC trả về JSON với TẤT CẢ các tỉnh và TỐI THIỂU 3-4 
             }
             summary = f"Dự báo lượng mưa tối đa {max_rain:.1f}mm. Cần theo dõi diễn biến."
         else:
-            # No flood risk - set timeline to null/N/A
+            # Low flood risk - set timeline to N/A but still show affected areas
             flood_timeline = {
                 "rising_start": "N/A",
                 "peak_date": "N/A",
                 "receding_end": "N/A"
             }
-            summary = f"Thời tiết ổn định, lượng mưa thấp ({max_rain:.1f}mm). Không có nguy cơ lũ lụt."
+            if max_rain < 20:
+                summary = f"Thời tiết ổn định, lượng mưa thấp ({max_rain:.1f}mm). Nguy cơ ngập cục bộ thấp."
+            else:
+                summary = f"Lượng mưa vừa phải ({max_rain:.1f}mm). Có thể ngập cục bộ ở vùng trũng."
 
         return {
             "peak_rain": {
@@ -531,15 +533,15 @@ BẮT BUỘC trả về JSON với TẤT CẢ các tỉnh và TỐI THIỂU 3-4 
                 "intensity": intensity
             },
             "flood_timeline": flood_timeline,
-            "affected_areas": affected_areas if has_flood_risk else [],  # No affected areas if no flood risk
+            "affected_areas": affected_areas,  # Always show affected areas with estimated data
             "overall_risk": {
                 "level": risk_level,
                 "score": risk_score,
                 "description": summary
             },
             "recommendations": {
-                "government": ["Theo dõi diễn biến thời tiết", "Chuẩn bị phương án ứng phó"] if has_flood_risk else ["Tiếp tục theo dõi dự báo thời tiết"],
-                "citizens": ["Theo dõi thông tin cảnh báo", "Chuẩn bị đồ dùng thiết yếu"] if has_flood_risk else ["Không cần chuẩn bị đặc biệt"]
+                "government": ["Theo dõi diễn biến thời tiết", "Chuẩn bị phương án ứng phó"] if has_significant_flood_risk else ["Tiếp tục theo dõi dự báo thời tiết", "Kiểm tra hệ thống thoát nước"],
+                "citizens": ["Theo dõi thông tin cảnh báo", "Chuẩn bị đồ dùng thiết yếu"] if has_significant_flood_risk else ["Theo dõi dự báo thời tiết", "Chú ý vùng trũng khi mưa"]
             },
             "summary": summary
         }
