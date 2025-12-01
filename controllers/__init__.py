@@ -9,6 +9,7 @@ from .alert_controller import router as alert_router
 from .station_controller import router as station_router
 from .location_controller import router as location_router
 from .evn_reservoir_controller import router as evn_reservoir_router
+from .rainfall_controller import router as rainfall_router
 
 __all__ = [
     "forecast_router",
@@ -18,4 +19,5 @@ __all__ = [
     "station_router",
     "location_router",
     "evn_reservoir_router",
+    "rainfall_router",
 ]

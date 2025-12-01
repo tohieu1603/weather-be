@@ -24,6 +24,7 @@ from controllers import (
     station_router,
     location_router,
     evn_reservoir_router,
+    rainfall_router,
 )
 from repositories.base import BaseRepository
 from repositories.ai_cache_repository import AICacheRepository
@@ -148,6 +149,7 @@ app.include_router(alert_router)
 app.include_router(station_router)
 app.include_router(location_router)
 app.include_router(evn_reservoir_router)
+app.include_router(rainfall_router)
 
 
 @app.get("/", tags=["Root"])
