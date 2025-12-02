@@ -1,27 +1,42 @@
 # Hướng dẫn cài đặt EVN Scraper trên VPS
 
-## Bước 1: Cài đặt Chrome/Chromium
+## Cách 1: Dùng Playwright (KHUYẾN NGHỊ - nhẹ hơn)
 
-### Ubuntu/Debian:
 ```bash
-# Update packages
-sudo apt update
+cd /path/to/futureweather/backend
+source venv/bin/activate
 
-# Install Chromium
-sudo apt install -y chromium-browser
+# Cài Playwright
+pip install playwright
 
-# Hoặc cài Chrome
-wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-sudo dpkg -i google-chrome-stable_current_amd64.deb
-sudo apt --fix-broken install -y
+# Cài Chromium browser (tự động download)
+playwright install chromium
+
+# Cài dependencies cho Linux headless
+playwright install-deps chromium
 ```
 
-### CentOS/RHEL:
+**Ưu điểm Playwright:**
+- Tự động download browser, không cần cài Chrome riêng
+- Nhẹ hơn Selenium
+- Hoạt động tốt trên VPS
+
+## Cách 2: Dùng Selenium (nếu Playwright không hoạt động)
+
+### Bước 1: Cài đặt Chrome/Chromium
+
+#### Ubuntu/Debian:
+```bash
+sudo apt update
+sudo apt install -y chromium-browser
+```
+
+#### CentOS/RHEL:
 ```bash
 sudo yum install -y chromium
 ```
 
-## Bước 2: Cài đặt Python dependencies
+### Bước 2: Cài đặt Python dependencies
 
 ```bash
 cd /path/to/futureweather/backend

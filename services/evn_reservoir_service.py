@@ -11,7 +11,14 @@ from bs4 import BeautifulSoup
 
 from repositories.evn_reservoir_repository import EVNReservoirRepository
 
-# Selenium imports (optional - only used for scraping)
+# Playwright imports (preferred - lighter than Selenium)
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+
+# Selenium imports (fallback - only used for scraping)
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
@@ -23,7 +30,11 @@ try:
     SELENIUM_AVAILABLE = True
 except ImportError:
     SELENIUM_AVAILABLE = False
-    print("Warning: Selenium not available. EVN scraping disabled.")
+
+if not PLAYWRIGHT_AVAILABLE and not SELENIUM_AVAILABLE:
+    print("Warning: Neither Playwright nor Selenium available. EVN scraping disabled.")
+    print("Install with: pip install playwright && playwright install chromium")
+    print("Or: pip install selenium webdriver-manager")
 
 
 class EVNReservoirService:
@@ -148,6 +159,77 @@ class EVNReservoirService:
             return int(value)
         except ValueError:
             return None
+
+    def scrape_evn_playwright(self) -> List[Dict[str, Any]]:
+        """
+        Scrape EVN reservoir data using Playwright (lighter than Selenium).
+        Install: pip install playwright && playwright install chromium
+        """
+        if not PLAYWRIGHT_AVAILABLE:
+            print("[EVN] Playwright not available")
+            return []
+
+        reservoirs = []
+        try:
+            print(f"[EVN Playwright] Loading {self.EVN_URL}...")
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(self.EVN_URL, wait_until="networkidle", timeout=30000)
+
+                # Wait for table to load
+                page.wait_for_selector("table", timeout=15000)
+
+                # Additional wait for AJAX data
+                page.wait_for_timeout(3000)
+
+                # Get all tables
+                tables = page.query_selector_all("table")
+                print(f"[EVN Playwright] Found {len(tables)} tables")
+
+                for table in tables:
+                    rows = table.query_selector_all("tr")
+
+                    for row in rows[2:]:  # Skip header rows
+                        cells = row.query_selector_all("td")
+                        if len(cells) < 10:
+                            continue
+
+                        # Parse reservoir name
+                        name = cells[0].inner_text().strip()
+                        if "Đồng bộ lúc:" in name:
+                            name = name.split("Đồng bộ lúc:")[0].strip()
+
+                        if not name or "tổng" in name.lower() or "stt" in name.lower():
+                            continue
+
+                        if name.replace(".", "").replace(",", "").isdigit():
+                            continue
+
+                        # EVN table: [0]Tên, [1]Ngày, [2]Htl, [3]Hdbt, [4]Hc, [5]Qve, [6]ΣQx, [7]Qxt, [8]Qxm, [9]Ncxs, [10]Ncxm
+                        reservoirs.append({
+                            "name": name,
+                            "htl": self._parse_float(cells[2].inner_text()),
+                            "hdbt": self._parse_float(cells[3].inner_text()),
+                            "hc": self._parse_float(cells[4].inner_text()),
+                            "qve": self._parse_float(cells[5].inner_text()),
+                            "total_qx": self._parse_float(cells[6].inner_text()),
+                            "qxt": self._parse_float(cells[7].inner_text()),
+                            "qxm": self._parse_float(cells[8].inner_text()),
+                            "ncxs": self._parse_int(cells[9].inner_text()),
+                            "ncxm": self._parse_int(cells[10].inner_text()) if len(cells) > 10 else 0,
+                        })
+
+                browser.close()
+
+            print(f"[EVN Playwright] Scraped {len(reservoirs)} reservoirs")
+            return reservoirs
+
+        except Exception as e:
+            print(f"[EVN Playwright] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
 
     def scrape_evn_selenium(self) -> List[Dict[str, Any]]:
         """
@@ -289,16 +371,27 @@ class EVNReservoirService:
             print("[EVN] No data for today, attempting to scrape from EVN...")
             data = None
 
-            if SELENIUM_AVAILABLE:
+            # Try Playwright first (lighter, preferred)
+            if PLAYWRIGHT_AVAILABLE and not data:
                 try:
-                    scraped = self.scrape_evn_selenium()
-                    if scraped:
-                        # Save to DB
+                    scraped = self.scrape_evn_playwright()
+                    if scraped and len(scraped) > 20:  # Valid data should have 30+ reservoirs
                         self.repo.save_batch(scraped)
                         data = scraped
-                        print(f"[EVN] Scraped and saved {len(data)} reservoirs")
+                        print(f"[EVN] Playwright: Scraped and saved {len(data)} reservoirs")
                 except Exception as e:
-                    print(f"[EVN] Scraping failed: {e}")
+                    print(f"[EVN] Playwright scraping failed: {e}")
+
+            # Fallback to Selenium if Playwright failed
+            if SELENIUM_AVAILABLE and not data:
+                try:
+                    scraped = self.scrape_evn_selenium()
+                    if scraped and len(scraped) > 20:
+                        self.repo.save_batch(scraped)
+                        data = scraped
+                        print(f"[EVN] Selenium: Scraped and saved {len(data)} reservoirs")
+                except Exception as e:
+                    print(f"[EVN] Selenium scraping failed: {e}")
 
             # If scraping failed, try to use latest data from DB (even if old)
             if not data:
@@ -308,7 +401,8 @@ class EVNReservoirService:
 
             # If still no data, use sample data as fallback
             if not data:
-                print("[EVN] Using sample data as fallback (no DB data)")
+                print("[EVN] WARNING: Using sample data as fallback (no scraper available)")
+                print("[EVN] Install: pip install playwright && playwright install chromium")
                 data = self._get_sample_data()
 
         # Add basin info
