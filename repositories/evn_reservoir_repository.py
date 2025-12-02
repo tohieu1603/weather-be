@@ -197,4 +197,9 @@ class EVNReservoirRepository(BaseRepository):
             WHERE DATE(fetched_at) = CURRENT_DATE
         """
         result = self.execute_query(query, fetch_one=True)
-        return result and result[0] > 0
+        if not result:
+            return False
+        # Handle both dict and tuple results
+        if isinstance(result, dict):
+            return result.get('cnt', 0) > 0
+        return result[0] > 0

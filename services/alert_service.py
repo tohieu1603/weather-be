@@ -24,6 +24,7 @@ from weather_api import (
     analyze_weather_for_alerts
 )
 from services.request_manager import acquire_heavy_task, release_heavy_task
+from services.evn_reservoir_service import EVNReservoirService
 
 
 class AlertService:
@@ -38,6 +39,7 @@ class AlertService:
     def __init__(self):
         self.repo = AlertRepository()
         self.alerts_cache_repo = CombinedAlertsCacheRepository()
+        self.evn_service = EVNReservoirService()
         self._weather_cache = None
         self._alerts_cache = None
         self._cache_time = None
@@ -76,6 +78,96 @@ class AlertService:
 
         return weather_data, alerts
 
+    def _get_evn_discharge_alerts(self) -> List[Dict[str, Any]]:
+        """
+        Lấy cảnh báo xả lũ từ dữ liệu hồ chứa EVN
+        """
+        try:
+            discharge_alerts = self.evn_service.get_discharge_alerts()
+            formatted_alerts = []
+
+            for r in discharge_alerts:
+                today = date.today().isoformat()
+                reservoir_name = r.get("name", "Unknown")
+                severity = r.get("severity", "medium")
+                basin = r.get("basin", "UNKNOWN")
+
+                # Map basin to region name
+                basin_names = {
+                    "HONG": "Bắc Bộ",
+                    "CENTRAL": "Trung Bộ",
+                    "MEKONG": "Tây Nguyên",
+                    "DONGNAI": "Đông Nam Bộ",
+                    "UNKNOWN": "Việt Nam"
+                }
+                region_name = basin_names.get(basin, "Việt Nam")
+
+                # Xác định mức độ nguy hiểm
+                has_spillway = (r.get("ncxs") or 0) > 0 or (r.get("ncxm") or 0) > 0
+                water_percent = r.get("water_percent", 0)
+                total_discharge = r.get("total_qx", 0)
+
+                if has_spillway and water_percent >= 95:
+                    danger_level = "Rất nguy hiểm"
+                elif has_spillway:
+                    danger_level = "Nguy hiểm"
+                elif water_percent >= 90:
+                    danger_level = "Cần theo dõi"
+                else:
+                    danger_level = "Bình thường"
+
+                description = f"Hồ chứa {reservoir_name} đang xả lũ. "
+                if has_spillway:
+                    gates = []
+                    if r.get("ncxs"):
+                        gates.append(f"{r['ncxs']} cửa xả sâu")
+                    if r.get("ncxm"):
+                        gates.append(f"{r['ncxm']} cửa xả mặt")
+                    description += f"Đang mở {', '.join(gates)}. "
+                description += f"Mực nước hiện tại {r.get('htl', 0):.1f}m ({water_percent:.1f}% so với mực nước dâng bình thường)."
+
+                formatted_alerts.append({
+                    "id": f"evn_discharge_{reservoir_name.replace(' ', '_')}_{today}",
+                    "type": "reservoir_discharge",
+                    "category": "Xả lũ hồ chứa",
+                    "title": f"Cảnh báo xả lũ - Hồ {reservoir_name}",
+                    "severity": severity,
+                    "date": today,
+                    "region": region_name,
+                    "provinces": [region_name],
+                    "description": description,
+                    "data": {
+                        "reservoir_name": reservoir_name,
+                        "basin": basin,
+                        "water_level_m": r.get("htl"),
+                        "normal_level_m": r.get("hdbt"),
+                        "dead_level_m": r.get("hc"),
+                        "water_percent": water_percent,
+                        "inflow_m3s": r.get("qve"),
+                        "total_discharge_m3s": r.get("total_qx"),
+                        "turbine_discharge_m3s": r.get("qxt"),
+                        "spillway_discharge_m3s": r.get("qxm"),
+                        "spillway_gates_deep": r.get("ncxs"),
+                        "spillway_gates_surface": r.get("ncxm"),
+                        "danger_level": danger_level,
+                        "alert_reason": r.get("alert_reason"),
+                    },
+                    "recommendations": [
+                        "Theo dõi thông báo từ Ban chỉ huy PCTT địa phương",
+                        "Người dân vùng hạ du cần cảnh giác" if has_spillway else "Theo dõi diễn biến mực nước",
+                        "Không đánh bắt cá, vớt củi trên sông",
+                        "Sẵn sàng sơ tán nếu có thông báo" if severity == "critical" else "Di chuyển tài sản, vật nuôi lên cao",
+                        "Tránh xa bờ sông, suối khi có xả lũ"
+                    ],
+                    "source": "EVN - Hệ thống thủy điện"
+                })
+
+            return formatted_alerts
+
+        except Exception as e:
+            print(f"[AlertService] Error getting EVN discharge alerts: {e}")
+            return []
+
     def get_realtime_alerts(self) -> Dict[str, Any]:
         """
         Get realtime alerts (today) - format matching main_simple.py
@@ -97,6 +189,12 @@ class AlertService:
             return cached
 
         weather_data, alerts = self._get_cached_weather_and_alerts()
+
+        # Add EVN reservoir discharge alerts
+        evn_alerts = self._get_evn_discharge_alerts()
+        if evn_alerts:
+            print(f"✓ Thêm {len(evn_alerts)} cảnh báo xả lũ từ EVN")
+            alerts = alerts + evn_alerts
 
         # Sort by severity
         severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -122,7 +220,7 @@ class AlertService:
             "alerts": alerts,
             "summary": summary,
             "by_category": by_category,
-            "data_source": "Open-Meteo API (Real Data)",
+            "data_source": "Open-Meteo API + EVN",
             "cache_duration_seconds": self.CACHE_TTL
         }
 
@@ -330,7 +428,17 @@ class AlertService:
             weather_data, alerts = self._get_cached_weather_and_alerts()
 
             with self._jobs_lock:
-                self._alert_jobs[job_id]["progress"] = 70
+                self._alert_jobs[job_id]["progress"] = 60
+
+            # Add EVN reservoir discharge alerts
+            print(f"[Alerts Job {job_id}] Fetching EVN discharge alerts...")
+            evn_alerts = self._get_evn_discharge_alerts()
+            if evn_alerts:
+                print(f"[Alerts Job {job_id}] Added {len(evn_alerts)} EVN alerts")
+                alerts = alerts + evn_alerts
+
+            with self._jobs_lock:
+                self._alert_jobs[job_id]["progress"] = 80
 
             # Process alerts
             severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -354,7 +462,7 @@ class AlertService:
                 "alerts": alerts,
                 "summary": summary,
                 "by_category": by_category,
-                "data_source": "Open-Meteo API (Real Data)",
+                "data_source": "Open-Meteo API + EVN",
                 "cache_duration_seconds": self.CACHE_TTL
             }
 

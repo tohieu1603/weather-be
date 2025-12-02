@@ -277,22 +277,38 @@ class EVNReservoirService:
         if self._is_cache_valid():
             return self._cache
 
-        data = self.repo.get_latest()
+        # Check if we have today's data
+        has_today = self.repo.has_today_data()
 
-        # If no data in DB, try to scrape from EVN
-        if not data:
-            print("[EVN] No data in DB, attempting to scrape from EVN...")
+        if has_today:
+            # Use today's data from DB
+            data = self.repo.get_today_data()
+            print(f"[EVN] Using today's data from DB: {len(data)} reservoirs")
+        else:
+            # No data for today - need to scrape
+            print("[EVN] No data for today, attempting to scrape from EVN...")
+            data = None
+
             if SELENIUM_AVAILABLE:
-                scraped = self.scrape_evn_selenium()
-                if scraped:
-                    # Save to DB
-                    self.repo.save_batch(scraped)
-                    data = scraped
-                    print(f"[EVN] Scraped and saved {len(data)} reservoirs")
+                try:
+                    scraped = self.scrape_evn_selenium()
+                    if scraped:
+                        # Save to DB
+                        self.repo.save_batch(scraped)
+                        data = scraped
+                        print(f"[EVN] Scraped and saved {len(data)} reservoirs")
+                except Exception as e:
+                    print(f"[EVN] Scraping failed: {e}")
+
+            # If scraping failed, try to use latest data from DB (even if old)
+            if not data:
+                data = self.repo.get_latest()
+                if data:
+                    print(f"[EVN] Using cached data from DB: {len(data)} reservoirs")
 
             # If still no data, use sample data as fallback
             if not data:
-                print("[EVN] Using sample data as fallback")
+                print("[EVN] Using sample data as fallback (no DB data)")
                 data = self._get_sample_data()
 
         # Add basin info

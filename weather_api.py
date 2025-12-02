@@ -379,6 +379,12 @@ def analyze_weather_for_alerts(weather_data: Dict) -> List[Dict]:
             # === CẢNH BÁO MƯA LỚN ===
             if precip >= 30:
                 severity = "critical" if precip >= 100 else "high" if precip >= 70 else "medium" if precip >= 50 else "low"
+                # Tính toán thêm các chỉ số
+                rain_intensity = "Mưa rất to" if precip >= 100 else "Mưa to" if precip >= 50 else "Mưa vừa" if precip >= 25 else "Mưa nhỏ"
+                flood_risk = round(min(100, (precip / 150) * 100), 0)  # % nguy cơ ngập
+                precip_hours = daily.get("precipitation_hours", [])[i] if i < len(daily.get("precipitation_hours", [])) else None
+                precip_prob = daily.get("precipitation_probability_max", [])[i] if i < len(daily.get("precipitation_probability_max", [])) else None
+
                 alerts.append({
                     "id": f"rain_{loc_code}_{date}",
                     "type": "heavy_rain",
@@ -394,47 +400,144 @@ def analyze_weather_for_alerts(weather_data: Dict) -> List[Dict]:
                                     "Mưa vừa đến lớn."),
                     "data": {
                         "rainfall_mm": round(precip, 1),
+                        "rain_intensity": rain_intensity,
+                        "precipitation_hours": round(precip_hours, 1) if precip_hours else None,
+                        "precipitation_probability": round(precip_prob) if precip_prob else None,
+                        "flood_risk_percent": flood_risk,
                         "weather_code": weather_code,
+                        "weather_description": get_weather_description(weather_code) if weather_code else None,
                         "wind_speed_kmh": round(wind, 1) if wind else None,
+                        "wind_gust_kmh": round(gust, 1) if gust else None,
+                        "temp_max_c": round(temp_max, 1) if temp_max else None,
+                        "temp_min_c": round(temp_min, 1) if temp_min else None,
+                        "humidity_note": "Độ ẩm cao" if precip >= 50 else "Độ ẩm tăng",
                     },
                     "recommendations": [
                         "Hạn chế ra ngoài khi có mưa to",
                         "Tránh xa các vùng trũng, dễ ngập",
-                        "Kiểm tra hệ thống thoát nước"
+                        "Kiểm tra hệ thống thoát nước",
+                        "Chuẩn bị đèn pin, nến phòng mất điện" if precip >= 70 else "Mang theo áo mưa khi ra ngoài",
+                        "Không lội qua vùng nước ngập" if precip >= 50 else "Cẩn thận đường trơn trượt",
                     ],
                     "source": "Open-Meteo API"
                 })
 
             # === CẢNH BÁO NẮNG NÓNG ===
+            # Theo QCVN: Nắng nóng >= 35°C, Nắng nóng gay gắt >= 37°C, Đặc biệt gay gắt >= 39°C
             if temp_max and temp_max >= 35:
-                severity = "critical" if temp_max >= 40 else "high" if temp_max >= 38 else "medium"
+                apparent_max = daily.get("apparent_temperature_max", [])[i] if i < len(daily.get("apparent_temperature_max", [])) else None
+                sunshine_hours = daily.get("sunshine_duration", [])[i] if i < len(daily.get("sunshine_duration", [])) else None
+                sunshine_hours = round(sunshine_hours / 3600, 1) if sunshine_hours else None
+
+                # Xác định loại nắng nóng và mức độ
+                if temp_max >= 39 or (apparent_max and apparent_max >= 42):
+                    severity = "critical"
+                    category = "Nắng nóng"
+                    heat_level = "Nắng nóng đặc biệt gay gắt"
+                    title = f"Nắng nóng đặc biệt gay gắt - {loc_info.get('name', loc_code)}"
+                elif temp_max >= 37 or (apparent_max and apparent_max >= 40):
+                    severity = "high"
+                    category = "Nắng nóng"
+                    heat_level = "Nắng nóng gay gắt"
+                    title = f"Nắng nóng gay gắt - {loc_info.get('name', loc_code)}"
+                else:
+                    severity = "medium"
+                    category = "Nắng nóng"
+                    heat_level = "Nắng nóng"
+                    title = f"Cảnh báo nắng nóng - {loc_info.get('name', loc_code)}"
+
                 alerts.append({
                     "id": f"heat_{loc_code}_{date}",
                     "type": "heat_wave",
-                    "category": "Nắng nóng",
-                    "title": f"Cảnh báo nắng nóng - {loc_info.get('name', loc_code)}",
+                    "category": category,
+                    "title": title,
                     "severity": severity,
                     "date": date,
                     "region": loc_info.get("name", loc_code),
                     "provinces": [loc_info.get("name", loc_code)],
-                    "description": f"Nhiệt độ cao nhất dự báo {temp_max:.1f}°C vào ngày {date}. " +
-                                   f"Nhiệt độ thấp nhất {temp_min:.1f}°C." if temp_min else "",
+                    "description": f"Nhiệt độ cao nhất {temp_max:.1f}°C" +
+                                   (f", cảm giác thực tế {apparent_max:.1f}°C" if apparent_max else "") +
+                                   f" vào ngày {date}. " +
+                                   ("Nguy hiểm cho sức khỏe, tránh ra ngoài." if temp_max >= 39 else
+                                    "Hạn chế hoạt động ngoài trời." if temp_max >= 37 else "Chú ý bổ sung nước."),
                     "data": {
                         "max_temperature_c": round(temp_max, 1),
                         "min_temperature_c": round(temp_min, 1) if temp_min else None,
+                        "apparent_temperature_c": round(apparent_max, 1) if apparent_max else None,
+                        "heat_level": heat_level,
                         "uv_index": round(uv, 1) if uv else None,
+                        "uv_level": "Cực kỳ cao" if uv and uv >= 11 else "Rất cao" if uv and uv >= 8 else "Cao" if uv and uv >= 6 else "Trung bình" if uv else None,
+                        "sunshine_hours": sunshine_hours,
+                        "weather_code": weather_code,
+                        "weather_description": get_weather_description(weather_code) if weather_code else None,
+                        "wind_speed_kmh": round(wind, 1) if wind else None,
+                        "dehydration_risk": "Rất cao" if temp_max >= 39 else "Cao" if temp_max >= 37 else "Trung bình",
                     },
                     "recommendations": [
-                        "Hạn chế ra ngoài từ 10h-16h",
-                        "Uống nhiều nước, mặc quần áo thoáng mát",
-                        "Người già, trẻ em cần đặc biệt chú ý"
+                        "KHÔNG ra ngoài từ 10h-16h" if temp_max >= 39 else "Hạn chế ra ngoài từ 10h-16h",
+                        "Uống 3-4 lít nước/ngày" if temp_max >= 37 else "Uống ít nhất 2 lít nước/ngày",
+                        "Người già, trẻ em, người bệnh tim mạch cần ở trong nhà mát",
+                        "Mặc quần áo thoáng mát, màu sáng",
+                        "Sử dụng kem chống nắng SPF 50+" if uv and uv >= 8 else "Đội mũ, kính râm khi ra ngoài",
+                        "Tránh lao động nặng ngoài trời" if temp_max >= 37 else "Nghỉ ngơi trong bóng râm"
                     ],
                     "source": "Open-Meteo API"
                 })
 
+            # === CẢNH BÁO NẮNG NÓNG CỤC BỘ ===
+            # Khi nhiệt độ 33-35°C nhưng apparent (cảm giác) >= 37°C hoặc UV rất cao
+            elif temp_max and temp_max >= 33 and temp_max < 35:
+                apparent_max = daily.get("apparent_temperature_max", [])[i] if i < len(daily.get("apparent_temperature_max", [])) else None
+                sunshine_hours = daily.get("sunshine_duration", [])[i] if i < len(daily.get("sunshine_duration", [])) else None
+                sunshine_hours = round(sunshine_hours / 3600, 1) if sunshine_hours else None
+
+                # Chỉ cảnh báo nếu cảm giác nóng hơn hoặc UV cao
+                if (apparent_max and apparent_max >= 37) or (uv and uv >= 9):
+                    severity = "medium" if (apparent_max and apparent_max >= 38) or (uv and uv >= 10) else "low"
+
+                    alerts.append({
+                        "id": f"heat_local_{loc_code}_{date}",
+                        "type": "heat_local",
+                        "category": "Nắng nóng cục bộ",
+                        "title": f"Nắng nóng cục bộ - {loc_info.get('name', loc_code)}",
+                        "severity": severity,
+                        "date": date,
+                        "region": loc_info.get("name", loc_code),
+                        "provinces": [loc_info.get("name", loc_code)],
+                        "description": f"Nhiệt độ {temp_max:.1f}°C" +
+                                       (f", cảm giác thực tế {apparent_max:.1f}°C" if apparent_max else "") +
+                                       (f", chỉ số UV {uv:.0f}" if uv else "") +
+                                       f" vào ngày {date}. Có thể nắng nóng cục bộ vào buổi trưa.",
+                        "data": {
+                            "max_temperature_c": round(temp_max, 1),
+                            "min_temperature_c": round(temp_min, 1) if temp_min else None,
+                            "apparent_temperature_c": round(apparent_max, 1) if apparent_max else None,
+                            "heat_level": "Nắng nóng cục bộ",
+                            "uv_index": round(uv, 1) if uv else None,
+                            "uv_level": "Rất cao" if uv and uv >= 8 else "Cao" if uv and uv >= 6 else "Trung bình",
+                            "sunshine_hours": sunshine_hours,
+                            "weather_code": weather_code,
+                            "weather_description": get_weather_description(weather_code) if weather_code else None,
+                            "wind_speed_kmh": round(wind, 1) if wind else None,
+                        },
+                        "recommendations": [
+                            "Hạn chế hoạt động ngoài trời từ 11h-15h",
+                            "Uống đủ nước, tránh đồ uống có cồn",
+                            "Đội mũ, mặc áo dài tay khi ra ngoài",
+                            "Chú ý bảo vệ da khi UV cao" if uv and uv >= 8 else "Nghỉ ngơi nơi thoáng mát"
+                        ],
+                        "source": "Open-Meteo API"
+                    })
+
             # === CẢNH BÁO GIÓ MẠNH ===
             if gust and gust >= 60:  # Gió giật >= 60 km/h
                 severity = "critical" if gust >= 100 else "high" if gust >= 80 else "medium"
+                # Xác định cấp gió Beaufort
+                beaufort_scale = 12 if gust >= 118 else 11 if gust >= 103 else 10 if gust >= 89 else 9 if gust >= 75 else 8 if gust >= 62 else 7
+                wind_level = "Bão" if gust >= 89 else "Gió mạnh cấp 8-9" if gust >= 75 else "Gió mạnh" if gust >= 62 else "Gió khá mạnh"
+                wind_direction = daily.get("wind_direction_10m_dominant", [])[i] if i < len(daily.get("wind_direction_10m_dominant", [])) else None
+                wind_dir_text = _get_wind_direction_text(wind_direction) if wind_direction else None
+
                 alerts.append({
                     "id": f"wind_{loc_code}_{date}",
                     "type": "strong_wind",
@@ -444,15 +547,28 @@ def analyze_weather_for_alerts(weather_data: Dict) -> List[Dict]:
                     "date": date,
                     "region": loc_info.get("name", loc_code),
                     "provinces": [loc_info.get("name", loc_code)],
-                    "description": f"Gió giật mạnh lên đến {gust:.0f} km/h vào ngày {date}.",
+                    "description": f"Gió giật mạnh lên đến {gust:.0f} km/h vào ngày {date}. " +
+                                   (f"Hướng gió chủ đạo: {wind_dir_text}. " if wind_dir_text else "") +
+                                   f"Tương đương gió cấp {beaufort_scale} theo thang Beaufort.",
                     "data": {
                         "wind_gust_kmh": round(gust, 1),
                         "wind_speed_kmh": round(wind, 1) if wind else None,
+                        "wind_level": wind_level,
+                        "beaufort_scale": beaufort_scale,
+                        "wind_direction_deg": round(wind_direction) if wind_direction else None,
+                        "wind_direction_text": wind_dir_text,
+                        "weather_code": weather_code,
+                        "weather_description": get_weather_description(weather_code) if weather_code else None,
+                        "rainfall_mm": round(precip, 1) if precip else None,
+                        "danger_level": "Rất nguy hiểm" if gust >= 100 else "Nguy hiểm" if gust >= 80 else "Cần cảnh giác",
                     },
                     "recommendations": [
                         "Chằng chống nhà cửa, cắt tỉa cành cây",
                         "Không đứng dưới cây lớn hoặc biển quảng cáo",
-                        "Tàu thuyền không ra khơi"
+                        "Tàu thuyền không ra khơi",
+                        "Di chuyển đồ vật có thể bay" if gust >= 80 else "Đóng cửa sổ, cửa ra vào",
+                        "Sơ tán khỏi nhà yếu" if gust >= 100 else "Ở trong nhà kiên cố",
+                        "Tránh xa bờ biển và sông" if gust >= 80 else "Hạn chế ra ngoài"
                     ],
                     "source": "Open-Meteo API"
                 })
@@ -472,11 +588,109 @@ def analyze_weather_for_alerts(weather_data: Dict) -> List[Dict]:
                     "description": f"Chỉ số UV đạt mức {uv:.0f} (rất cao) vào ngày {date}.",
                     "data": {
                         "uv_index": round(uv, 1),
+                        "uv_level": "Cực kỳ cao" if uv >= 11 else "Rất cao" if uv >= 8 else "Cao",
+                        "max_temperature_c": round(temp_max, 1) if temp_max else None,
+                        "sunshine_hours": round(daily.get("sunshine_duration", [])[i] / 3600, 1) if i < len(daily.get("sunshine_duration", [])) and daily.get("sunshine_duration", [])[i] else None,
+                        "weather_code": weather_code,
+                        "weather_description": get_weather_description(weather_code) if weather_code else None,
                     },
                     "recommendations": [
                         "Tránh ra ngoài từ 10h-15h",
                         "Sử dụng kem chống nắng SPF 50+",
-                        "Đội mũ, mặc áo dài tay khi ra ngoài"
+                        "Đội mũ, mặc áo dài tay khi ra ngoài",
+                        "Đeo kính râm bảo vệ mắt",
+                        "Uống nhiều nước"
+                    ],
+                    "source": "Open-Meteo API"
+                })
+
+            # === CẢNH BÁO RÉT ĐẬM / RÉT HẠI ===
+            if temp_min is not None and temp_min <= 15:
+                # Rét hại: <= 10°C, Rét đậm: 10-13°C, Rét: 13-15°C
+                if temp_min <= 10:
+                    severity = "critical" if temp_min <= 5 else "high"
+                    category = "Rét hại"
+                    cold_level = "Rét hại nghiêm trọng" if temp_min <= 5 else "Rét hại"
+                elif temp_min <= 13:
+                    severity = "high" if temp_min <= 11 else "medium"
+                    category = "Rét đậm"
+                    cold_level = "Rét đậm"
+                else:
+                    severity = "medium"
+                    category = "Rét"
+                    cold_level = "Trời rét"
+
+                apparent_min = daily.get("apparent_temperature_min", [])[i] if i < len(daily.get("apparent_temperature_min", [])) else None
+
+                alerts.append({
+                    "id": f"cold_{loc_code}_{date}",
+                    "type": "cold_wave",
+                    "category": category,
+                    "title": f"Cảnh báo {category.lower()} - {loc_info.get('name', loc_code)}",
+                    "severity": severity,
+                    "date": date,
+                    "region": loc_info.get("name", loc_code),
+                    "provinces": [loc_info.get("name", loc_code)],
+                    "description": f"Nhiệt độ thấp nhất dự báo {temp_min:.1f}°C vào ngày {date}. " +
+                                   (f"Nhiệt độ cảm nhận thực tế có thể xuống đến {apparent_min:.1f}°C. " if apparent_min else "") +
+                                   ("Nguy hiểm cho sức khỏe." if temp_min <= 10 else "Cần giữ ấm cơ thể."),
+                    "data": {
+                        "min_temperature_c": round(temp_min, 1),
+                        "max_temperature_c": round(temp_max, 1) if temp_max else None,
+                        "apparent_min_temperature_c": round(apparent_min, 1) if apparent_min else None,
+                        "cold_level": cold_level,
+                        "wind_speed_kmh": round(wind, 1) if wind else None,
+                        "weather_code": weather_code,
+                        "weather_description": get_weather_description(weather_code) if weather_code else None,
+                        "rainfall_mm": round(precip, 1) if precip else None,
+                    },
+                    "recommendations": [
+                        "Mặc đủ ấm, nhiều lớp áo",
+                        "Giữ ấm tay chân, đầu, cổ",
+                        "Người già, trẻ em hạn chế ra ngoài",
+                        "Không sưởi ấm bằng than trong phòng kín",
+                        "Che chắn chuồng trại gia súc, gia cầm" if temp_min <= 10 else "Uống nước ấm, ăn đủ chất",
+                        "Kiểm tra sức khỏe người già, trẻ nhỏ thường xuyên" if temp_min <= 10 else "Hạn chế tắm khuya"
+                    ],
+                    "source": "Open-Meteo API"
+                })
+
+            # === CẢNH BÁO HẠN HÁN ===
+            # Kiểm tra nếu không có mưa nhiều ngày và nhiệt độ cao
+            et0 = daily.get("et0_fao_evapotranspiration", [])[i] if i < len(daily.get("et0_fao_evapotranspiration", [])) else None
+            # Hạn hán khi: không mưa (precip < 5mm) + nhiệt độ cao (>30°C) + bốc hơi cao (et0 > 5mm/ngày)
+            if precip < 5 and temp_max and temp_max >= 32 and et0 and et0 >= 5:
+                severity = "high" if et0 >= 7 or temp_max >= 37 else "medium"
+                drought_level = "Khô hạn nghiêm trọng" if et0 >= 7 else "Khô hạn"
+
+                alerts.append({
+                    "id": f"drought_{loc_code}_{date}",
+                    "type": "drought",
+                    "category": "Hạn hán",
+                    "title": f"Cảnh báo hạn hán - {loc_info.get('name', loc_code)}",
+                    "severity": severity,
+                    "date": date,
+                    "region": loc_info.get("name", loc_code),
+                    "provinces": [loc_info.get("name", loc_code)],
+                    "description": f"Thời tiết khô nóng vào ngày {date}. Nhiệt độ {temp_max:.1f}°C, " +
+                                   f"lượng bốc hơi {et0:.1f}mm/ngày, không có mưa. Nguy cơ thiếu nước.",
+                    "data": {
+                        "max_temperature_c": round(temp_max, 1),
+                        "evapotranspiration_mm": round(et0, 1),
+                        "rainfall_mm": round(precip, 1),
+                        "drought_level": drought_level,
+                        "humidity_status": "Rất khô" if et0 >= 7 else "Khô",
+                        "weather_code": weather_code,
+                        "weather_description": get_weather_description(weather_code) if weather_code else None,
+                        "uv_index": round(uv, 1) if uv else None,
+                    },
+                    "recommendations": [
+                        "Tiết kiệm nước sinh hoạt",
+                        "Tưới cây vào sáng sớm hoặc chiều tối",
+                        "Che phủ đất để giữ ẩm",
+                        "Dự trữ nước cho gia súc, gia cầm",
+                        "Theo dõi nguồn nước sinh hoạt",
+                        "Phòng chống cháy rừng"
                     ],
                     "source": "Open-Meteo API"
                 })
@@ -559,6 +773,20 @@ WEATHER_CODES = {
 def get_weather_description(code: int) -> str:
     """Chuyển weather code thành mô tả tiếng Việt"""
     return WEATHER_CODES.get(code, "Không xác định")
+
+
+def _get_wind_direction_text(degrees: float) -> str:
+    """Chuyển độ hướng gió thành văn bản tiếng Việt"""
+    if degrees is None:
+        return None
+    directions = [
+        "Bắc", "Bắc Đông Bắc", "Đông Bắc", "Đông Đông Bắc",
+        "Đông", "Đông Đông Nam", "Đông Nam", "Nam Đông Nam",
+        "Nam", "Nam Tây Nam", "Tây Nam", "Tây Tây Nam",
+        "Tây", "Tây Tây Bắc", "Tây Bắc", "Bắc Tây Bắc"
+    ]
+    index = round(degrees / 22.5) % 16
+    return directions[index]
 
 
 if __name__ == "__main__":
