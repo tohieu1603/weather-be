@@ -105,6 +105,21 @@ async def sync_from_frontend(data: List[Dict[str, Any]]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/scrape")
+async def scrape_evn_data() -> Dict[str, Any]:
+    """
+    Trigger backend to scrape EVN website directly using Selenium.
+    Use this when frontend scraping is not available.
+
+    Requires Chrome/Chromium installed on server.
+    """
+    try:
+        result = service.scrape_and_save()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/analysis/{basin_name}")
 async def get_comprehensive_analysis(basin_name: str) -> Dict[str, Any]:
     """
