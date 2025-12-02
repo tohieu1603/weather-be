@@ -13,7 +13,8 @@ from repositories.evn_reservoir_repository import EVNReservoirRepository
 
 # Playwright imports (preferred - lighter than Selenium)
 try:
-    from playwright.sync_api import sync_playwright
+    from playwright.async_api import async_playwright
+    import asyncio
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
@@ -160,43 +161,39 @@ class EVNReservoirService:
         except ValueError:
             return None
 
-    def scrape_evn_playwright(self) -> List[Dict[str, Any]]:
+    async def _scrape_evn_playwright_async(self) -> List[Dict[str, Any]]:
         """
-        Scrape EVN reservoir data using Playwright (lighter than Selenium).
-        Install: pip install playwright && playwright install chromium
+        Async version of Playwright scraper.
         """
-        if not PLAYWRIGHT_AVAILABLE:
-            print("[EVN] Playwright not available")
-            return []
-
         reservoirs = []
         try:
             print(f"[EVN Playwright] Loading {self.EVN_URL}...")
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
-                page.goto(self.EVN_URL, wait_until="networkidle", timeout=30000)
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+                await page.goto(self.EVN_URL, wait_until="networkidle", timeout=30000)
 
                 # Wait for table to load
-                page.wait_for_selector("table", timeout=15000)
+                await page.wait_for_selector("table", timeout=15000)
 
                 # Additional wait for AJAX data
-                page.wait_for_timeout(3000)
+                await page.wait_for_timeout(3000)
 
                 # Get all tables
-                tables = page.query_selector_all("table")
+                tables = await page.query_selector_all("table")
                 print(f"[EVN Playwright] Found {len(tables)} tables")
 
                 for table in tables:
-                    rows = table.query_selector_all("tr")
+                    rows = await table.query_selector_all("tr")
 
                     for row in rows[2:]:  # Skip header rows
-                        cells = row.query_selector_all("td")
+                        cells = await row.query_selector_all("td")
                         if len(cells) < 10:
                             continue
 
                         # Parse reservoir name
-                        name = cells[0].inner_text().strip()
+                        name_text = await cells[0].inner_text()
+                        name = name_text.strip()
                         if "Đồng bộ lúc:" in name:
                             name = name.split("Đồng bộ lúc:")[0].strip()
 
@@ -209,21 +206,51 @@ class EVNReservoirService:
                         # EVN table: [0]Tên, [1]Ngày, [2]Htl, [3]Hdbt, [4]Hc, [5]Qve, [6]ΣQx, [7]Qxt, [8]Qxm, [9]Ncxs, [10]Ncxm
                         reservoirs.append({
                             "name": name,
-                            "htl": self._parse_float(cells[2].inner_text()),
-                            "hdbt": self._parse_float(cells[3].inner_text()),
-                            "hc": self._parse_float(cells[4].inner_text()),
-                            "qve": self._parse_float(cells[5].inner_text()),
-                            "total_qx": self._parse_float(cells[6].inner_text()),
-                            "qxt": self._parse_float(cells[7].inner_text()),
-                            "qxm": self._parse_float(cells[8].inner_text()),
-                            "ncxs": self._parse_int(cells[9].inner_text()),
-                            "ncxm": self._parse_int(cells[10].inner_text()) if len(cells) > 10 else 0,
+                            "htl": self._parse_float(await cells[2].inner_text()),
+                            "hdbt": self._parse_float(await cells[3].inner_text()),
+                            "hc": self._parse_float(await cells[4].inner_text()),
+                            "qve": self._parse_float(await cells[5].inner_text()),
+                            "total_qx": self._parse_float(await cells[6].inner_text()),
+                            "qxt": self._parse_float(await cells[7].inner_text()),
+                            "qxm": self._parse_float(await cells[8].inner_text()),
+                            "ncxs": self._parse_int(await cells[9].inner_text()),
+                            "ncxm": self._parse_int(await cells[10].inner_text()) if len(cells) > 10 else 0,
                         })
 
-                browser.close()
+                await browser.close()
 
             print(f"[EVN Playwright] Scraped {len(reservoirs)} reservoirs")
             return reservoirs
+
+        except Exception as e:
+            print(f"[EVN Playwright] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def scrape_evn_playwright(self) -> List[Dict[str, Any]]:
+        """
+        Scrape EVN reservoir data using Playwright (lighter than Selenium).
+        Install: pip install playwright && playwright install chromium
+        """
+        if not PLAYWRIGHT_AVAILABLE:
+            print("[EVN] Playwright not available")
+            return []
+
+        try:
+            # Check if we're already in an event loop
+            try:
+                loop = asyncio.get_running_loop()
+                # We're in an async context, need to run in a new thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(
+                        lambda: asyncio.run(self._scrape_evn_playwright_async())
+                    )
+                    return future.result(timeout=60)
+            except RuntimeError:
+                # No running loop, safe to use asyncio.run
+                return asyncio.run(self._scrape_evn_playwright_async())
 
         except Exception as e:
             print(f"[EVN Playwright] Error: {e}")
